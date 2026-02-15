@@ -3,57 +3,60 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trade Journal</title>
+    <title>Journal OS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="layout">
       <aside class="sidebar">
         <div>
-          <p class="eyebrow">Trading Workspace</p>
+          <p class="kicker">Trading Workspace</p>
           <h1>Journal OS</h1>
+
           <div class="market-switch" id="market-switch">
-            <button class="market-btn active" data-market="usa">USA Market</button>
-            <button class="market-btn" data-market="india">India Market</button>
+            <button class="market-btn active" data-market="usa">USA</button>
+            <button class="market-btn" data-market="india">India</button>
           </div>
+
           <nav class="nav">
             <button class="nav-btn active" data-view="journal">Trade Journal</button>
             <button class="nav-btn" data-view="report">Report</button>
           </nav>
         </div>
-        <div class="sidebar-meta">
-          <p id="sheet-meta">0 trades in USA sheet</p>
-          <p id="updated-meta">No updates yet</p>
+
+        <div class="meta">
+          <p id="meta-count">0 trades</p>
+          <p id="meta-updated">No updates</p>
         </div>
       </aside>
 
-      <main class="main">
+      <main class="content">
         <section id="journal-view" class="view active">
-          <header class="toolbar sticky-top">
-            <div class="toolbar-left">
+          <header class="toolbar sticky">
+            <div>
               <h2>Trade Table</h2>
-              <p>Spreadsheet-style journal with automatic quantity and R calculations.</p>
+              <p>Attio-style row entry with automatic risk and size logic.</p>
             </div>
-            <div class="toolbar-right">
-              <label class="compact">
+            <div class="toolbar-controls">
+              <label class="mini">
                 Account Size
-                <input type="number" id="account-size" step="0.01" min="0" value="10000" />
+                <input id="global-account-size" type="number" step="0.01" min="0" value="10000" />
               </label>
-              <label class="compact">
+              <label class="mini">
                 Risk % / Trade
-                <input type="number" id="risk-pct" step="0.01" min="0.01" value="0.25" />
+                <input id="global-risk-pct" type="number" step="0.01" min="0.01" value="0.25" />
               </label>
-              <button id="add-empty-row" class="ghost-btn">Add Row</button>
-              <button id="open-drawer" class="primary-btn">Add Trade</button>
+              <button id="add-row" class="btn ghost">Add Row</button>
+              <button id="open-drawer" class="btn primary">Add Trade</button>
             </div>
           </header>
 
-          <section class="table-card">
+          <section class="table-shell">
             <div class="table-scroll">
-              <table class="journal-table" id="journal-table">
+              <table class="sheet">
                 <thead>
                   <tr>
                     <th>Date</th>
@@ -68,66 +71,66 @@
                     <th>Strategy</th>
                     <th>EMA %</th>
                     <th>Initial Move %</th>
+                    <th>Screenshot</th>
                     <th>Account Size</th>
                     <th>Risk %</th>
-                    <th>Calc Qty</th>
+                    <th>Position Size</th>
                     <th>R</th>
                     <th>Net P&L</th>
                     <th>Status</th>
-                    <th>Screenshot</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
-                <tbody id="journal-body"></tbody>
+                <tbody id="table-body"></tbody>
               </table>
             </div>
           </section>
         </section>
 
         <section id="report-view" class="view">
-          <header class="toolbar sticky-top">
-            <div class="toolbar-left">
-              <h2>Analytics Report</h2>
-              <p>Time-filtered metrics and strategy performance.</p>
+          <header class="toolbar sticky">
+            <div>
+              <h2>Report</h2>
+              <p>Performance metrics and strategy analysis by date range.</p>
             </div>
-            <div class="toolbar-right">
-              <label class="compact">From <input type="date" id="filter-from" /></label>
-              <label class="compact">To <input type="date" id="filter-to" /></label>
-              <button id="clear-filter" class="ghost-btn">Clear</button>
+            <div class="toolbar-controls">
+              <label class="mini">From <input id="filter-from" type="date" /></label>
+              <label class="mini">To <input id="filter-to" type="date" /></label>
+              <button id="reset-filter" class="btn ghost">Reset</button>
             </div>
           </header>
 
           <div class="kpi-grid" id="kpi-grid"></div>
 
-          <section class="report-grid">
+          <div class="chart-grid">
             <article class="card">
               <h3>Equity Curve</h3>
-              <svg id="equity-chart" viewBox="0 0 640 240"></svg>
+              <svg id="equity-chart" viewBox="0 0 640 230"></svg>
             </article>
             <article class="card">
               <h3>R Distribution</h3>
-              <svg id="r-chart" viewBox="0 0 640 240"></svg>
+              <svg id="r-dist-chart" viewBox="0 0 640 230"></svg>
             </article>
             <article class="card">
               <h3>P&L by Strategy</h3>
-              <svg id="strategy-chart" viewBox="0 0 640 240"></svg>
+              <svg id="pnl-strategy-chart" viewBox="0 0 640 230"></svg>
             </article>
             <article class="card">
               <h3>Win Rate by Strategy</h3>
-              <svg id="win-chart" viewBox="0 0 640 240"></svg>
+              <svg id="win-strategy-chart" viewBox="0 0 640 230"></svg>
             </article>
-          </section>
+          </div>
 
-          <section class="card" id="strategy-report"></section>
-          <section class="card" id="screenshot-report"></section>
+          <article class="card" id="strategy-table-card"></article>
+          <article class="card" id="screenshot-card"></article>
         </section>
       </main>
     </div>
 
-    <aside id="trade-drawer" class="drawer">
+    <aside id="drawer" class="drawer">
       <div class="drawer-head">
         <h3>Add Trade</h3>
-        <button id="close-drawer" class="icon-btn">✕</button>
+        <button id="close-drawer" class="icon-btn">x</button>
       </div>
       <form id="drawer-form" class="drawer-form">
         <label>Trade Date <input type="date" name="tradeDate" required /></label>
@@ -138,31 +141,29 @@
             <option value="Short">Short</option>
           </select>
         </label>
-        <label>Entry <input type="number" step="0.0001" name="entry" required /></label>
-        <label>Stop Loss <input type="number" step="0.0001" name="sl" required /></label>
-        <label>PS (optional override qty) <input type="number" step="0.0001" name="manualPS" /></label>
-        <label>Exit Price 1 <input type="number" step="0.0001" name="exit1" /></label>
-        <label>Exit Price 2 <input type="number" step="0.0001" name="exit2" /></label>
-        <label>Exit Price 3 <input type="number" step="0.0001" name="exit3" /></label>
-        <label>Strategy Tag <input type="text" name="strategyTag" placeholder="Breakout / Reversal" required /></label>
-        <label>EMA Distance % <input type="number" step="0.01" name="emaDistancePct" /></label>
-        <label>Initial Move % <input type="number" step="0.01" name="initialMovePct" /></label>
-        <label>Account Size (optional, defaults to top setting) <input type="number" step="0.01" name="accountSize" /></label>
-        <label>Risk % (optional) <input type="number" step="0.01" name="riskPct" placeholder="Defaults to top setting" /></label>
+        <label>Entry <input type="number" name="entry" step="0.0001" required /></label>
+        <label>SL <input type="number" name="sl" step="0.0001" required /></label>
+        <label>PS (manual qty, optional) <input type="number" name="manualQty" step="0.0001" /></label>
+        <label>Exit Price 1 <input type="number" name="exit1" step="0.0001" /></label>
+        <label>Exit Price 2 <input type="number" name="exit2" step="0.0001" /></label>
+        <label>Exit Price 3 <input type="number" name="exit3" step="0.0001" /></label>
+        <label>Strategy Tag <input type="text" name="strategyTag" required /></label>
+        <label>EMA Distance % <input type="number" name="emaPct" step="0.01" /></label>
+        <label>Initial Move % <input type="number" name="initialMovePct" step="0.01" /></label>
+        <label>Account Size (optional) <input type="number" name="accountSize" step="0.01" /></label>
+        <label>Risk % (optional) <input type="number" name="riskPct" step="0.01" /></label>
         <label>Screenshot <input type="file" name="screenshot" accept="image/*" /></label>
-        <label>Notes <textarea name="notes" rows="3"></textarea></label>
 
         <div class="drawer-actions">
-          <button type="button" id="cancel-drawer" class="ghost-btn">Cancel</button>
-          <button type="submit" class="primary-btn">Save Trade</button>
+          <button type="button" id="cancel-drawer" class="btn ghost">Cancel</button>
+          <button type="submit" class="btn primary">Save Trade</button>
         </div>
       </form>
     </aside>
-
-    <div id="drawer-overlay" class="drawer-overlay"></div>
+    <div id="overlay" class="overlay"></div>
 
     <template id="kpi-template">
-      <div class="kpi-card">
+      <div class="kpi">
         <p class="kpi-label"></p>
         <p class="kpi-value"></p>
       </div>
