@@ -3,7 +3,7 @@ const STORAGE_KEY = "trade-journal-v2";
 const state = {
   market: "usa",
   view: "journal",
-  settings: { riskPct: 0.25 },
+  settings: { riskPct: 0.25, accountSize: 10000 },
   sheets: { usa: [], india: [] },
   filteredReportTrades: [],
 };
@@ -17,6 +17,7 @@ const el = {
   updatedMeta: document.getElementById("updated-meta"),
 
   riskPct: document.getElementById("risk-pct"),
+  accountSize: document.getElementById("account-size"),
   addEmptyRow: document.getElementById("add-empty-row"),
   openDrawer: document.getElementById("open-drawer"),
   journalBody: document.getElementById("journal-body"),
@@ -69,6 +70,15 @@ function bind() {
     renderAll();
   });
 
+  el.accountSize.addEventListener("change", () => {
+    const val = clamp(toNum(el.accountSize.value), 0, Number.MAX_SAFE_INTEGER);
+    state.settings.accountSize = val;
+    el.accountSize.value = val;
+    recalcActiveSheet();
+    persist();
+    renderAll();
+  });
+
   el.addEmptyRow.addEventListener("click", () => {
     state.sheets[state.market].push(calcTrade(newTrade()));
     persist();
@@ -103,6 +113,7 @@ function hydrate() {
     // ignore corrupt storage
   }
   el.riskPct.value = state.settings.riskPct;
+  el.accountSize.value = state.settings.accountSize;
 }
 
 function persist() {
@@ -314,8 +325,9 @@ function calcTrade(tradeRaw) {
     riskPct: toNum(tradeRaw.riskPct) || state.settings.riskPct,
   };
 
+  const effectiveAccountSize = trade.accountSize > 0 ? trade.accountSize : state.settings.accountSize;
   const riskPerUnit = Math.abs(trade.entry - trade.sl);
-  const riskAmount = (trade.accountSize * trade.riskPct) / 100;
+  const riskAmount = (effectiveAccountSize * trade.riskPct) / 100;
   const qtyAuto = riskPerUnit > 0 ? riskAmount / riskPerUnit : 0;
   const qty = trade.manualPS > 0 ? trade.manualPS : qtyAuto;
 
@@ -336,6 +348,7 @@ function calcTrade(tradeRaw) {
 
   return {
     ...trade,
+    effectiveAccountSize,
     calculatedQty: qtyAuto,
     riskAmount,
     avgExit,
