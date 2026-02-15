@@ -1,572 +1,452 @@
-const STORAGE_KEY = "atlas-trade-journal-v1";
+const STORAGE_KEY = "trade-journal-v2";
 
 const state = {
-  trades: [],
-  filtered: [],
-  view: "dashboard",
+  market: "usa",
+  view: "journal",
+  settings: { riskPct: 0.25 },
+  sheets: { usa: [], india: [] },
+  filteredReportTrades: [],
 };
 
-const els = {
-  tradeForm: document.getElementById("trade-form"),
-  strategyPreset: document.getElementById("strategy-preset"),
-  customStrategyWrap: document.getElementById("custom-strategy-wrap"),
-  filterDateFrom: document.getElementById("filter-date-from"),
-  filterDateTo: document.getElementById("filter-date-to"),
-  filterStrategy: document.getElementById("filter-strategy"),
-  filterInstrument: document.getElementById("filter-instrument"),
-  filterDirection: document.getElementById("filter-direction"),
-  clearFilters: document.getElementById("clear-filters"),
-  kpiGrid: document.getElementById("kpi-grid"),
-  kpiTemplate: document.getElementById("kpi-card-template"),
-  heatmap: document.getElementById("performance-heatmap"),
-  strategyCards: document.getElementById("strategy-cards"),
-  tradeTableWrap: document.getElementById("trade-table-wrap"),
-  tradeCount: document.getElementById("trade-count"),
-  lastUpdated: document.getElementById("last-updated"),
+const el = {
+  marketSwitch: document.getElementById("market-switch"),
   navBtns: Array.from(document.querySelectorAll(".nav-btn")),
-  views: {
-    dashboard: document.getElementById("view-dashboard"),
-    strategy: document.getElementById("view-strategy"),
-    log: document.getElementById("view-log"),
-  },
+  journalView: document.getElementById("journal-view"),
+  reportView: document.getElementById("report-view"),
+  sheetMeta: document.getElementById("sheet-meta"),
+  updatedMeta: document.getElementById("updated-meta"),
+
+  riskPct: document.getElementById("risk-pct"),
+  addEmptyRow: document.getElementById("add-empty-row"),
+  openDrawer: document.getElementById("open-drawer"),
+  journalBody: document.getElementById("journal-body"),
+
+  drawer: document.getElementById("trade-drawer"),
+  drawerOverlay: document.getElementById("drawer-overlay"),
+  closeDrawer: document.getElementById("close-drawer"),
+  cancelDrawer: document.getElementById("cancel-drawer"),
+  drawerForm: document.getElementById("drawer-form"),
+
+  filterFrom: document.getElementById("filter-from"),
+  filterTo: document.getElementById("filter-to"),
+  clearFilter: document.getElementById("clear-filter"),
+
+  kpiGrid: document.getElementById("kpi-grid"),
+  kpiTemplate: document.getElementById("kpi-template"),
+  strategyReport: document.getElementById("strategy-report"),
+  screenshotReport: document.getElementById("screenshot-report"),
 };
 
-init();
+boot();
 
-function init() {
-  loadTrades();
-  bindEvents();
-  populateFilters();
-  applyFilters();
+function boot() {
+  hydrate();
+  bind();
   renderAll();
 }
 
-function bindEvents() {
-  els.tradeForm.addEventListener("submit", onTradeSubmit);
-  els.strategyPreset.addEventListener("change", toggleCustomStrategy);
-  [
-    els.filterDateFrom,
-    els.filterDateTo,
-    els.filterStrategy,
-    els.filterInstrument,
-    els.filterDirection,
-  ].forEach((el) => el.addEventListener("change", applyAndRender));
-
-  els.clearFilters.addEventListener("click", () => {
-    els.filterDateFrom.value = "";
-    els.filterDateTo.value = "";
-    els.filterStrategy.value = "all";
-    els.filterInstrument.value = "all";
-    els.filterDirection.value = "all";
-    applyAndRender();
+function bind() {
+  el.marketSwitch.addEventListener("click", (event) => {
+    const btn = event.target.closest(".market-btn");
+    if (!btn) return;
+    state.market = btn.dataset.market;
+    renderAll();
   });
 
-  els.navBtns.forEach((btn) => {
+  el.navBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
       state.view = btn.dataset.view;
-      els.navBtns.forEach((b) => b.classList.toggle("active", b === btn));
-      Object.entries(els.views).forEach(([key, view]) => {
-        view.classList.toggle("active", key === state.view);
-      });
+      renderViews();
     });
   });
 
-  els.tradeTableWrap.addEventListener("click", (event) => {
-    if (event.target.matches("[data-delete-id]")) {
-      const id = event.target.getAttribute("data-delete-id");
-      state.trades = state.trades.filter((trade) => trade.id !== id);
-      persistTrades();
-      populateFilters();
-      applyAndRender();
-    }
+  el.riskPct.addEventListener("change", () => {
+    const val = clamp(toNum(el.riskPct.value), 0.01, 20);
+    state.settings.riskPct = val;
+    el.riskPct.value = val;
+    recalcActiveSheet();
+    persist();
+    renderAll();
+  });
+
+  el.addEmptyRow.addEventListener("click", () => {
+    state.sheets[state.market].push(calcTrade(newTrade()));
+    persist();
+    renderAll();
+  });
+
+  el.openDrawer.addEventListener("click", openDrawer);
+  el.closeDrawer.addEventListener("click", closeDrawer);
+  el.cancelDrawer.addEventListener("click", closeDrawer);
+  el.drawerOverlay.addEventListener("click", closeDrawer);
+  el.drawerForm.addEventListener("submit", submitDrawerTrade);
+
+  el.journalBody.addEventListener("change", onJournalEdit);
+  el.journalBody.addEventListener("click", onJournalClick);
+
+  [el.filterFrom, el.filterTo].forEach((x) => x.addEventListener("change", renderReport));
+  el.clearFilter.addEventListener("click", () => {
+    el.filterFrom.value = "";
+    el.filterTo.value = "";
+    renderReport();
   });
 }
 
-function loadTrades() {
+function hydrate() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    state.trades = raw ? JSON.parse(raw) : [];
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    state.settings = parsed.settings || state.settings;
+    state.sheets = parsed.sheets || state.sheets;
   } catch {
-    state.trades = [];
+    // ignore corrupt storage
   }
+  el.riskPct.value = state.settings.riskPct;
 }
 
-function persistTrades() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.trades));
+function persist() {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      settings: state.settings,
+      sheets: state.sheets,
+    })
+  );
 }
 
-function toggleCustomStrategy() {
-  const custom = els.strategyPreset.value === "Custom";
-  els.customStrategyWrap.classList.toggle("hidden", !custom);
-}
-
-async function onTradeSubmit(event) {
-  event.preventDefault();
-  const formData = new FormData(els.tradeForm);
-  const screenshotFile = formData.get("screenshot");
-  const screenshotData = screenshotFile && screenshotFile.size > 0 ? await fileToDataUrl(screenshotFile) : "";
-
-  const strategyPreset = (formData.get("strategyPreset") || "").trim();
-  const strategyCustom = (formData.get("strategyCustom") || "").trim();
-  const strategyTag = strategyPreset === "Custom" ? strategyCustom || "Custom" : strategyPreset;
-
-  const trade = calculateTrade({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-    tradeDate: formData.get("tradeDate"),
-    tradeTime: formData.get("tradeTime"),
-    exitDate: formData.get("exitDate"),
-    exitTime: formData.get("exitTime"),
-    instrument: (formData.get("instrument") || "").trim(),
-    tradeType: formData.get("tradeType"),
-    entryPrice: toNum(formData.get("entryPrice")),
-    stopLoss: toNum(formData.get("stopLoss")),
-    positionSize: toNum(formData.get("positionSize")),
-    finalExitPrice: toNum(formData.get("finalExitPrice")),
-    target1RR: toNum(formData.get("target1RR")),
-    target2RR: toNum(formData.get("target2RR")),
-    target3RR: toNum(formData.get("target3RR")),
-    strategyTag,
-    initialMoveType: formData.get("initialMoveType"),
-    ema10Abs: toNum(formData.get("ema10Abs")),
-    ema10Pct: toNum(formData.get("ema10Pct")),
-    ema20Abs: toNum(formData.get("ema20Abs")),
-    ema20Pct: toNum(formData.get("ema20Pct")),
-    ema50Abs: toNum(formData.get("ema50Abs")),
-    ema50Pct: toNum(formData.get("ema50Pct")),
-    fees: toNum(formData.get("fees")),
-    screenshotData,
-    screenshotName: screenshotFile && screenshotFile.size > 0 ? screenshotFile.name : "",
-    notes: (formData.get("notes") || "").trim(),
-    psychologyNotes: (formData.get("psychologyNotes") || "").trim(),
-    createdAt: new Date().toISOString(),
-  });
-
-  state.trades.push(trade);
-  state.trades.sort((a, b) => toDateTime(a.tradeDate, a.tradeTime) - toDateTime(b.tradeDate, b.tradeTime));
-  persistTrades();
-
-  els.tradeForm.reset();
-  els.strategyPreset.value = "Breakout Continuation";
-  toggleCustomStrategy();
-
-  populateFilters();
-  applyAndRender();
-}
-
-function calculateTrade(input) {
-  const entry = input.entryPrice;
-  const stop = input.stopLoss;
-  const exit = input.finalExitPrice;
-  const size = input.positionSize;
-  const fees = input.fees || 0;
-
-  const riskPerUnit = Math.abs(entry - stop);
-  const riskAmount = riskPerUnit * size;
-  const direction = input.tradeType === "Long" ? 1 : -1;
-  const rewardPerUnit = (exit - entry) * direction;
-
-  const grossPnL = rewardPerUnit * size;
-  const netPnL = grossPnL - fees;
-  const rMultiple = riskAmount > 0 ? netPnL / riskAmount : 0;
-  const rrRatio = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
-  const returnPct = entry > 0 ? (netPnL / (entry * size)) * 100 : 0;
-  const winLoss = netPnL >= 0 ? "Win" : "Loss";
-
-  const holdMinutes = getHoldMinutes(input.tradeDate, input.tradeTime, input.exitDate, input.exitTime);
-
-  return {
-    ...input,
-    riskPerTrade: riskPerUnit,
-    riskAmount,
-    rewardPerUnit,
-    grossPnL,
-    netPnL,
-    rMultiple,
-    rrRatio,
-    returnPct,
-    winLoss,
-    holdMinutes,
-  };
-}
-
-function getHoldMinutes(startDate, startTime, endDate, endTime) {
-  if (!endDate || !endTime) return null;
-  const start = toDateTime(startDate, startTime);
-  const end = toDateTime(endDate, endTime);
-  if (!start || !end) return null;
-  const diff = Math.round((end - start) / 60000);
-  return diff > 0 ? diff : null;
-}
-
-function toDateTime(date, time) {
-  if (!date || !time) return null;
-  return new Date(`${date}T${time}`);
-}
-
-function toNum(value) {
-  if (value === null || value === undefined || value === "") return 0;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Unable to read file"));
-    reader.readAsDataURL(file);
-  });
-}
-
-function applyFilters() {
-  const from = els.filterDateFrom.value;
-  const to = els.filterDateTo.value;
-  const strategy = els.filterStrategy.value;
-  const instrument = els.filterInstrument.value;
-  const direction = els.filterDirection.value;
-
-  state.filtered = state.trades.filter((trade) => {
-    const passDateFrom = !from || trade.tradeDate >= from;
-    const passDateTo = !to || trade.tradeDate <= to;
-    const passStrategy = strategy === "all" || trade.strategyTag === strategy;
-    const passInstrument = instrument === "all" || trade.instrument === instrument;
-    const passDirection = direction === "all" || trade.tradeType === direction;
-    return passDateFrom && passDateTo && passStrategy && passInstrument && passDirection;
-  });
-}
-
-function applyAndRender() {
-  applyFilters();
-  renderAll();
-}
-
-function populateFilters() {
-  fillSelect(els.filterStrategy, uniqueValues(state.trades.map((t) => t.strategyTag)));
-  fillSelect(els.filterInstrument, uniqueValues(state.trades.map((t) => t.instrument)));
-}
-
-function fillSelect(select, values) {
-  const current = select.value;
-  const opts = ["<option value=\"all\">All</option>"]
-    .concat(values.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`))
-    .join("");
-  select.innerHTML = opts;
-  if (["all", ...values].includes(current)) {
-    select.value = current;
-  }
-}
-
-function uniqueValues(list) {
-  return [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+function getActiveTrades() {
+  return state.sheets[state.market] || [];
 }
 
 function renderAll() {
-  renderMeta();
-  renderKpis();
-  renderDashboardCharts();
-  renderHeatmap();
-  renderStrategyCards();
-  renderTradeLog();
+  renderViews();
+  renderSidebar();
+  renderJournal();
+  renderReport();
 }
 
-function renderMeta() {
-  els.tradeCount.textContent = `${state.trades.length} trades logged`;
-  if (!state.trades.length) {
-    els.lastUpdated.textContent = "No trades yet";
+function renderViews() {
+  el.navBtns.forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+  el.journalView.classList.toggle("active", state.view === "journal");
+  el.reportView.classList.toggle("active", state.view === "report");
+}
+
+function renderSidebar() {
+  Array.from(el.marketSwitch.querySelectorAll(".market-btn")).forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.market === state.market);
+  });
+
+  const trades = getActiveTrades();
+  el.sheetMeta.textContent = `${trades.length} trades in ${state.market.toUpperCase()} sheet`;
+  if (!trades.length) {
+    el.updatedMeta.textContent = "No updates yet";
     return;
   }
-  const latest = state.trades[state.trades.length - 1];
-  els.lastUpdated.textContent = `Last trade: ${latest.tradeDate} ${latest.tradeTime}`;
+  const latest = trades[trades.length - 1];
+  el.updatedMeta.textContent = `Last update: ${latest.tradeDate || "-"} ${latest.instrument || ""}`;
 }
 
-function renderKpis() {
-  const m = computeMetrics(state.filtered);
-  const cards = [
-    ["Trades", m.totalTrades],
-    ["Win Rate", `${fmt(m.winRate)}%`],
-    ["Gross P&L", money(m.totalGross)],
-    ["Net P&L", money(m.totalNet)],
-    ["Average R", fmt(m.avgR)],
-    ["Average Win", money(m.avgWin)],
-    ["Average Loss", money(m.avgLoss)],
-    ["Expectancy (R)", fmt(m.expectancyR)],
-    ["Max Drawdown", money(m.maxDrawdown)],
-    ["Risk/Reward", fmt(m.avgRR)],
-    ["Avg Hold Time", fmtMinutes(m.avgHoldMinutes)],
-    ["Profit Factor", fmt(m.profitFactor)],
-  ];
-
-  els.kpiGrid.innerHTML = "";
-  cards.forEach(([label, value]) => {
-    const node = els.kpiTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector(".kpi-label").textContent = label;
-    node.querySelector(".kpi-value").textContent = value;
-    els.kpiGrid.appendChild(node);
-  });
-}
-
-function computeMetrics(trades) {
-  const totalTrades = trades.length;
-  const wins = trades.filter((t) => t.netPnL >= 0);
-  const losses = trades.filter((t) => t.netPnL < 0);
-
-  const totalGross = sum(trades.map((t) => t.grossPnL));
-  const totalNet = sum(trades.map((t) => t.netPnL));
-  const winRate = totalTrades ? (wins.length / totalTrades) * 100 : 0;
-  const avgR = average(trades.map((t) => t.rMultiple));
-  const avgWin = average(wins.map((t) => t.netPnL));
-  const avgLoss = average(losses.map((t) => t.netPnL));
-  const avgWinR = average(wins.map((t) => t.rMultiple));
-  const avgLossR = average(losses.map((t) => t.rMultiple));
-  const lossRate = 1 - winRate / 100;
-  const expectancyR = (winRate / 100) * avgWinR + lossRate * avgLossR;
-  const maxDrawdown = computeMaxDrawdown(trades.map((t) => t.netPnL));
-  const avgRR = average(trades.map((t) => t.rrRatio));
-  const avgHoldMinutes = average(trades.map((t) => t.holdMinutes).filter(Boolean));
-
-  const grossProfit = sum(wins.map((t) => t.netPnL));
-  const grossLoss = Math.abs(sum(losses.map((t) => t.netPnL)));
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
-
-  return {
-    totalTrades,
-    totalGross,
-    totalNet,
-    winRate,
-    avgR,
-    avgWin,
-    avgLoss,
-    expectancyR,
-    maxDrawdown,
-    avgRR,
-    avgHoldMinutes,
-    profitFactor,
-  };
-}
-
-function renderDashboardCharts() {
-  const trades = state.filtered;
-
-  renderLineChart(
-    "equity-chart",
-    cumulative(trades.map((t) => t.netPnL)),
-    { lineColor: "#2663ff", label: "Equity" }
-  );
-
-  renderHistogram("r-dist-chart", trades.map((t) => t.rMultiple), 8);
-
-  const strategyGroups = groupBy(trades, (t) => t.strategyTag || "Unlabeled");
-  const strategyLabels = Object.keys(strategyGroups);
-
-  const strategyWinValues = strategyLabels.map((label) => {
-    const group = strategyGroups[label];
-    const wins = group.filter((t) => t.netPnL >= 0).length;
-    return group.length ? (wins / group.length) * 100 : 0;
-  });
-  renderBarChart("strategy-win-chart", strategyLabels, strategyWinValues, "#0bbf8a", "%");
-
-  const strategyPnlValues = strategyLabels.map((label) => sum(strategyGroups[label].map((t) => t.netPnL)));
-  renderBarChart("strategy-pnl-chart", strategyLabels, strategyPnlValues, "#2663ff", "$", true);
-
-  const dowLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const dowPnl = dowLabels.map((dow) =>
-    sum(trades.filter((t) => dayLabel(t.tradeDate) === dow).map((t) => t.netPnL))
-  );
-  renderBarChart("dow-chart", dowLabels, dowPnl, "#1f4dbf", "$", true);
-
-  const timeBuckets = [
-    { label: "Pre", start: 0, end: 9 },
-    { label: "Open", start: 9, end: 12 },
-    { label: "Mid", start: 12, end: 15 },
-    { label: "Close", start: 15, end: 24 },
-  ];
-  const todValues = timeBuckets.map((bucket) =>
-    sum(
-      trades
-        .filter((t) => {
-          const hour = getHour(t.tradeTime);
-          return hour >= bucket.start && hour < bucket.end;
-        })
-        .map((t) => t.netPnL)
-    )
-  );
-  renderBarChart(
-    "tod-chart",
-    timeBuckets.map((b) => b.label),
-    todValues,
-    "#0f9ec7",
-    "$",
-    true
-  );
-
-  const emaBins = [
-    { label: "0-0.5%", min: 0, max: 0.5 },
-    { label: "0.5-1%", min: 0.5, max: 1 },
-    { label: "1-2%", min: 1, max: 2 },
-    { label: "2%+", min: 2, max: Infinity },
-  ];
-  const emaValues = emaBins.map((bin) => {
-    const group = trades.filter((t) => {
-      const v = Math.abs(t.ema10Pct || 0);
-      return v >= bin.min && v < bin.max;
-    });
-    return average(group.map((t) => t.rMultiple));
-  });
-  renderBarChart(
-    "ema-range-chart",
-    emaBins.map((b) => b.label),
-    emaValues,
-    "#7a4df2",
-    "R",
-    true
-  );
-
-  renderLineChart(
-    "risk-chart",
-    trades.map((t) => t.riskAmount),
-    { lineColor: "#d6454e", label: "Risk" }
-  );
-}
-
-function renderHeatmap() {
-  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const blocks = [
-    { label: "Pre", start: 0, end: 9 },
-    { label: "Open", start: 9, end: 12 },
-    { label: "Mid", start: 12, end: 15 },
-    { label: "Close", start: 15, end: 24 },
-  ];
-
-  const map = {};
-  weekdays.forEach((d) => {
-    map[d] = {};
-    blocks.forEach((b) => {
-      map[d][b.label] = [];
-    });
-  });
-
-  state.filtered.forEach((trade) => {
-    const day = dayLabel(trade.tradeDate);
-    const hour = getHour(trade.tradeTime);
-    const block = blocks.find((b) => hour >= b.start && hour < b.end);
-    if (day && block) map[day][block.label].push(trade.netPnL);
-  });
-
-  let html = `<div class="hm-head"></div>${blocks.map((b) => `<div class="hm-head">${b.label}</div>`).join("")}`;
-
-  weekdays.forEach((day) => {
-    html += `<div class="hm-head">${day}</div>`;
-    blocks.forEach((block) => {
-      const vals = map[day][block.label];
-      const pnl = sum(vals);
-      const intensity = Math.min(Math.abs(pnl) / 1000, 1);
-      const bg = pnl >= 0
-        ? `rgba(11, 191, 138, ${0.08 + intensity * 0.35})`
-        : `rgba(214, 69, 78, ${0.08 + intensity * 0.35})`;
-      html += `<div class="hm-cell" style="background:${bg}"><strong>${money(pnl)}</strong><span>${vals.length} trades</span></div>`;
-    });
-  });
-
-  els.heatmap.innerHTML = html;
-}
-
-function renderStrategyCards() {
-  const groups = groupBy(state.filtered, (t) => t.strategyTag || "Unlabeled");
-  const names = Object.keys(groups).sort((a, b) => a.localeCompare(b));
-
-  if (!names.length) {
-    els.strategyCards.innerHTML = `<div class="panel">No strategies found for current filters.</div>`;
-    return;
-  }
-
-  els.strategyCards.innerHTML = names
-    .map((name) => {
-      const trades = groups[name];
-      const metrics = computeMetrics(trades);
-      const best = trades.reduce((acc, t) => (t.netPnL > acc.netPnL ? t : acc), trades[0]);
-      const worst = trades.reduce((acc, t) => (t.netPnL < acc.netPnL ? t : acc), trades[0]);
-      const curve = cumulative(trades.map((t) => t.netPnL));
-      const spark = sparklineSvg(curve);
-
+function renderJournal() {
+  const rows = getActiveTrades()
+    .map((trade) => {
+      const statusClass = trade.netPnl >= 0 ? "win" : "loss";
       return `
-        <article class="strategy-card">
-          <h3>${escapeHtml(name)}</h3>
-          <div class="strategy-stats">
-            <span>Total Trades: <strong>${metrics.totalTrades}</strong></span>
-            <span>Avg R: <strong>${fmt(metrics.avgR)}</strong></span>
-            <span>Win Rate: <strong>${fmt(metrics.winRate)}%</strong></span>
-            <span>Profit Factor: <strong>${fmt(metrics.profitFactor)}</strong></span>
-            <span>Expectancy: <strong>${fmt(metrics.expectancyR)}R</strong></span>
-            <span>Net P&L: <strong>${money(metrics.totalNet)}</strong></span>
-            <span>Best Trade: <strong>${money(best.netPnL)}</strong></span>
-            <span>Worst Trade: <strong>${money(worst.netPnL)}</strong></span>
-          </div>
-          ${spark}
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderTradeLog() {
-  if (!state.filtered.length) {
-    els.tradeTableWrap.innerHTML = `<p>No trades match current filters.</p>`;
-    return;
-  }
-
-  const rows = state.filtered
-    .slice()
-    .reverse()
-    .map((t) => {
-      const badge = t.netPnL >= 0 ? "win" : "loss";
-      const screenshot = t.screenshotData
-        ? `<a href="${t.screenshotData}" target="_blank" rel="noopener">View</a>`
-        : "-";
-      return `
-        <tr>
-          <td>${escapeHtml(t.tradeDate)} ${escapeHtml(t.tradeTime)}</td>
-          <td>${escapeHtml(t.instrument)}</td>
-          <td>${escapeHtml(t.tradeType)}</td>
-          <td>${escapeHtml(t.strategyTag)}</td>
-          <td>${fmt(t.entryPrice)}</td>
-          <td>${fmt(t.stopLoss)}</td>
-          <td>${fmt(t.finalExitPrice)}</td>
-          <td>${fmt(t.positionSize)}</td>
-          <td>${money(t.riskAmount)}</td>
-          <td>${fmt(t.rMultiple)}R</td>
-          <td>${money(t.netPnL)}</td>
-          <td>${fmt(t.returnPct)}%</td>
-          <td><span class="badge ${badge}">${t.winLoss}</span></td>
-          <td>${fmtMinutes(t.holdMinutes)}</td>
-          <td>${screenshot}</td>
-          <td>${escapeHtml(t.notes || "-")}</td>
-          <td><button class="ghost-btn" data-delete-id="${t.id}">Delete</button></td>
+        <tr data-id="${trade.id}">
+          <td>${cellInput("date", trade.tradeDate, "tradeDate")}</td>
+          <td>${cellInput("text", trade.instrument, "instrument")}</td>
+          <td>
+            <select class="cell-select" data-field="tradeType">
+              <option value="Long" ${trade.tradeType === "Long" ? "selected" : ""}>Long</option>
+              <option value="Short" ${trade.tradeType === "Short" ? "selected" : ""}>Short</option>
+            </select>
+          </td>
+          <td>${cellInput("number", trade.entry, "entry", "0.0001")}</td>
+          <td>${cellInput("number", trade.sl, "sl", "0.0001")}</td>
+          <td>${cellInput("number", trade.manualPS, "manualPS", "0.0001")}</td>
+          <td>${cellInput("number", trade.exit1, "exit1", "0.0001")}</td>
+          <td>${cellInput("number", trade.exit2, "exit2", "0.0001")}</td>
+          <td>${cellInput("number", trade.exit3, "exit3", "0.0001")}</td>
+          <td>${cellInput("text", trade.strategyTag, "strategyTag")}</td>
+          <td>${cellInput("number", trade.emaDistancePct, "emaDistancePct", "0.01")}</td>
+          <td>${cellInput("number", trade.initialMovePct, "initialMovePct", "0.01")}</td>
+          <td>${cellInput("number", trade.accountSize, "accountSize", "0.01")}</td>
+          <td>${cellInput("number", trade.riskPct, "riskPct", "0.01")}</td>
+          <td>${fmt(trade.calculatedQty)}</td>
+          <td>${fmt(trade.rMultiple)}</td>
+          <td>${money(trade.netPnl)}</td>
+          <td><span class="result-chip ${statusClass}">${trade.resultLabel}</span></td>
+          <td>${trade.screenshotData ? `<a href="${trade.screenshotData}" class="small-link" target="_blank">View</a>` : "-"}</td>
+          <td><button class="ghost-btn" data-action="delete">Delete</button></td>
         </tr>
       `;
     })
     .join("");
 
-  els.tradeTableWrap.innerHTML = `
-    <table class="trade-table">
+  el.journalBody.innerHTML = rows || `<tr><td colspan="20">No trades yet. Use Add Row or Add Trade.</td></tr>`;
+}
+
+function cellInput(type, value, field, step = "") {
+  return `<input class="cell-input" type="${type}" ${step ? `step="${step}"` : ""} data-field="${field}" value="${escapeHtml(
+    value ?? ""
+  )}" />`;
+}
+
+function onJournalEdit(event) {
+  const input = event.target.closest("[data-field]");
+  if (!input) return;
+  const row = event.target.closest("tr[data-id]");
+  if (!row) return;
+
+  const id = row.dataset.id;
+  const field = input.dataset.field;
+  const trades = getActiveTrades();
+  const trade = trades.find((t) => t.id === id);
+  if (!trade) return;
+
+  trade[field] = input.value;
+  Object.assign(trade, calcTrade(trade));
+  persist();
+  renderAll();
+}
+
+function onJournalClick(event) {
+  const btn = event.target.closest("[data-action]");
+  if (!btn) return;
+
+  const row = event.target.closest("tr[data-id]");
+  if (!row) return;
+
+  if (btn.dataset.action === "delete") {
+    state.sheets[state.market] = getActiveTrades().filter((t) => t.id !== row.dataset.id);
+    persist();
+    renderAll();
+  }
+}
+
+function openDrawer() {
+  el.drawer.classList.add("open");
+  el.drawerOverlay.classList.add("open");
+}
+
+function closeDrawer() {
+  el.drawer.classList.remove("open");
+  el.drawerOverlay.classList.remove("open");
+}
+
+async function submitDrawerTrade(event) {
+  event.preventDefault();
+  const fd = new FormData(el.drawerForm);
+  const file = fd.get("screenshot");
+  const screenshotData = file && file.size > 0 ? await toDataUrl(file) : "";
+  const screenshotAnalysis = screenshotData ? await analyzeImage(screenshotData) : null;
+
+  const trade = calcTrade({
+    ...newTrade(),
+    tradeDate: fd.get("tradeDate"),
+    instrument: trim(fd.get("instrument")),
+    tradeType: fd.get("tradeType") || "Long",
+    entry: toNum(fd.get("entry")),
+    sl: toNum(fd.get("sl")),
+    manualPS: toNum(fd.get("manualPS")),
+    exit1: toNum(fd.get("exit1")),
+    exit2: toNum(fd.get("exit2")),
+    exit3: toNum(fd.get("exit3")),
+    strategyTag: trim(fd.get("strategyTag")),
+    emaDistancePct: toNum(fd.get("emaDistancePct")),
+    initialMovePct: toNum(fd.get("initialMovePct")),
+    accountSize: toNum(fd.get("accountSize")),
+    riskPct: toNum(fd.get("riskPct")) || state.settings.riskPct,
+    notes: trim(fd.get("notes")),
+    screenshotData,
+    screenshotAnalysis,
+  });
+
+  state.sheets[state.market].push(trade);
+  sortTrades(state.sheets[state.market]);
+  persist();
+  el.drawerForm.reset();
+  closeDrawer();
+  renderAll();
+}
+
+function newTrade() {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    tradeDate: "",
+    instrument: "",
+    tradeType: "Long",
+    entry: 0,
+    sl: 0,
+    manualPS: 0,
+    exit1: 0,
+    exit2: 0,
+    exit3: 0,
+    strategyTag: "",
+    emaDistancePct: 0,
+    initialMovePct: 0,
+    accountSize: 0,
+    riskPct: state.settings.riskPct,
+    calculatedQty: 0,
+    riskAmount: 0,
+    avgExit: 0,
+    netPnl: 0,
+    rMultiple: 0,
+    resultLabel: "Loss",
+    notes: "",
+    screenshotData: "",
+    screenshotAnalysis: null,
+  };
+}
+
+function calcTrade(tradeRaw) {
+  const trade = {
+    ...tradeRaw,
+    entry: toNum(tradeRaw.entry),
+    sl: toNum(tradeRaw.sl),
+    manualPS: toNum(tradeRaw.manualPS),
+    exit1: toNum(tradeRaw.exit1),
+    exit2: toNum(tradeRaw.exit2),
+    exit3: toNum(tradeRaw.exit3),
+    emaDistancePct: toNum(tradeRaw.emaDistancePct),
+    initialMovePct: toNum(tradeRaw.initialMovePct),
+    accountSize: toNum(tradeRaw.accountSize),
+    riskPct: toNum(tradeRaw.riskPct) || state.settings.riskPct,
+  };
+
+  const riskPerUnit = Math.abs(trade.entry - trade.sl);
+  const riskAmount = (trade.accountSize * trade.riskPct) / 100;
+  const qtyAuto = riskPerUnit > 0 ? riskAmount / riskPerUnit : 0;
+  const qty = trade.manualPS > 0 ? trade.manualPS : qtyAuto;
+
+  const exits = [trade.exit1, trade.exit2, trade.exit3].filter((x) => x > 0);
+  let avgExit = exits.length ? avg(exits) : 0;
+
+  const direction = trade.tradeType === "Short" ? -1 : 1;
+  const pnlPerUnit = avgExit > 0 ? (avgExit - trade.entry) * direction : 0;
+
+  let netPnl = pnlPerUnit * qty;
+  let rMultiple = riskAmount > 0 ? netPnl / riskAmount : 0;
+
+  if (!exits.length && trade.entry > 0 && trade.sl > 0) {
+    netPnl = -riskAmount;
+    rMultiple = -1;
+    avgExit = trade.sl;
+  }
+
+  return {
+    ...trade,
+    calculatedQty: qtyAuto,
+    riskAmount,
+    avgExit,
+    netPnl,
+    rMultiple,
+    resultLabel: netPnl >= 0 ? "Win" : "Loss",
+  };
+}
+
+function recalcActiveSheet() {
+  state.sheets[state.market] = getActiveTrades().map((t) => calcTrade(t));
+}
+
+function renderReport() {
+  const trades = filterByDate(getActiveTrades(), el.filterFrom.value, el.filterTo.value);
+  state.filteredReportTrades = trades;
+
+  renderKpis(trades);
+  renderCharts(trades);
+  renderStrategyReport(trades);
+  renderScreenshotReport(trades);
+}
+
+function renderKpis(trades) {
+  const metrics = computeMetrics(trades);
+  const cards = [
+    ["Trades", metrics.totalTrades],
+    ["Win Rate", `${fmt(metrics.winRate)}%`],
+    ["Net P&L", money(metrics.netPnl)],
+    ["Average R", fmt(metrics.avgR)],
+    ["Expectancy", `${fmt(metrics.expectancy)} R`],
+    ["Average Win", money(metrics.avgWin)],
+    ["Average Loss", money(metrics.avgLoss)],
+    ["Max Drawdown", money(metrics.maxDd)],
+  ];
+
+  el.kpiGrid.innerHTML = "";
+  cards.forEach(([label, value]) => {
+    const node = el.kpiTemplate.content.firstElementChild.cloneNode(true);
+    node.querySelector(".kpi-label").textContent = label;
+    node.querySelector(".kpi-value").textContent = value;
+    el.kpiGrid.appendChild(node);
+  });
+}
+
+function computeMetrics(trades) {
+  const totalTrades = trades.length;
+  const wins = trades.filter((t) => t.netPnl >= 0);
+  const losses = trades.filter((t) => t.netPnl < 0);
+
+  const netPnl = sum(trades.map((t) => t.netPnl));
+  const winRate = totalTrades ? (wins.length / totalTrades) * 100 : 0;
+  const avgR = avg(trades.map((t) => t.rMultiple));
+  const avgWin = avg(wins.map((t) => t.netPnl));
+  const avgLoss = avg(losses.map((t) => t.netPnl));
+  const expectancy = avgR;
+  const maxDd = maxDrawdown(trades.map((t) => t.netPnl));
+
+  return { totalTrades, winRate, netPnl, avgR, avgWin, avgLoss, expectancy, maxDd };
+}
+
+function renderCharts(trades) {
+  const eq = cumulative(trades.map((t) => t.netPnl));
+  lineChart("equity-chart", eq, "#2162ff", "Equity");
+  histogram("r-chart", trades.map((t) => t.rMultiple), 9);
+
+  const byStrategy = groupBy(trades, (t) => t.strategyTag || "Unlabeled");
+  const labels = Object.keys(byStrategy);
+  const pnl = labels.map((l) => sum(byStrategy[l].map((x) => x.netPnl)));
+  const wins = labels.map((l) => {
+    const group = byStrategy[l];
+    return group.length ? (group.filter((g) => g.netPnl >= 0).length / group.length) * 100 : 0;
+  });
+
+  barChart("strategy-chart", labels, pnl, true);
+  barChart("win-chart", labels, wins, false, "%");
+}
+
+function renderStrategyReport(trades) {
+  const byStrategy = groupBy(trades, (t) => t.strategyTag || "Unlabeled");
+  const labels = Object.keys(byStrategy).sort((a, b) => a.localeCompare(b));
+
+  if (!labels.length) {
+    el.strategyReport.innerHTML = "<h3>Strategy Performance</h3><p>No strategy data in selected period.</p>";
+    return;
+  }
+
+  const rows = labels
+    .map((label) => {
+      const group = byStrategy[label];
+      const metrics = computeMetrics(group);
+      return `<tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${metrics.totalTrades}</td>
+        <td>${fmt(metrics.avgR)}</td>
+        <td>${fmt(metrics.winRate)}%</td>
+        <td>${money(metrics.netPnl)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  el.strategyReport.innerHTML = `
+    <h3>Strategy Performance</h3>
+    <table class="strategy-table">
       <thead>
         <tr>
-          <th>Date/Time</th>
-          <th>Instrument</th>
-          <th>Type</th>
           <th>Strategy</th>
-          <th>Entry</th>
-          <th>SL</th>
-          <th>Exit</th>
-          <th>Size</th>
-          <th>Risk</th>
-          <th>R</th>
+          <th>Total Trades</th>
+          <th>Avg R</th>
+          <th>Win Rate</th>
           <th>Net P&L</th>
-          <th>Return</th>
-          <th>Result</th>
-          <th>Hold</th>
-          <th>Shot</th>
-          <th>Notes</th>
-          <th>Actions</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -574,219 +454,277 @@ function renderTradeLog() {
   `;
 }
 
-function renderLineChart(svgId, values, opts = {}) {
-  const svg = document.getElementById(svgId);
-  const width = 600;
-  const height = 250;
-  const m = { top: 20, right: 20, bottom: 28, left: 40 };
-
-  if (!values.length) {
-    svg.innerHTML = emptySvgLabel(width, height, "No data");
+function renderScreenshotReport(trades) {
+  const withShots = trades.filter((t) => t.screenshotAnalysis);
+  if (!withShots.length) {
+    el.screenshotReport.innerHTML = `
+      <h3>Screenshot Insights</h3>
+      <p>No screenshots uploaded in selected period.</p>
+    `;
     return;
   }
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const safeMin = min === max ? min - 1 : min;
-  const safeMax = min === max ? max + 1 : max;
-
-  const x = (i) => m.left + (i / Math.max(values.length - 1, 1)) * (width - m.left - m.right);
-  const y = (v) => m.top + ((safeMax - v) / (safeMax - safeMin)) * (height - m.top - m.bottom);
-
-  const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-  const last = values[values.length - 1];
-
-  svg.innerHTML = `
-    <line x1="${m.left}" y1="${height - m.bottom}" x2="${width - m.right}" y2="${height - m.bottom}" stroke="#c8d5ef" />
-    <line x1="${m.left}" y1="${m.top}" x2="${m.left}" y2="${height - m.bottom}" stroke="#c8d5ef" />
-    <polyline fill="none" stroke="${opts.lineColor || "#2663ff"}" stroke-width="2.5" points="${points}" />
-    <circle cx="${x(values.length - 1)}" cy="${y(last)}" r="4" fill="${opts.lineColor || "#2663ff"}" />
-    <text x="${width - 120}" y="${m.top + 10}" class="axis-label">${opts.label || "Value"}: ${fmt(last)}</text>
-    <text x="${m.left}" y="${height - 8}" class="axis-label">1</text>
-    <text x="${width - m.right - 18}" y="${height - 8}" class="axis-label">${values.length}</text>
-  `;
-}
-
-function renderBarChart(svgId, labels, values, color, suffix = "", diverging = false) {
-  const svg = document.getElementById(svgId);
-  const width = 600;
-  const height = 250;
-  const m = { top: 20, right: 14, bottom: 55, left: 48 };
-
-  if (!labels.length || !values.length) {
-    svg.innerHTML = emptySvgLabel(width, height, "No data");
-    return;
-  }
-
-  const min = diverging ? Math.min(0, ...values) : 0;
-  const max = Math.max(...values, 0.1);
-  const span = max - min || 1;
-  const barW = (width - m.left - m.right) / labels.length;
-  const zeroY = m.top + ((max - 0) / span) * (height - m.top - m.bottom);
-
-  const bars = labels
-    .map((label, i) => {
-      const v = values[i] || 0;
-      const x = m.left + i * barW + 6;
-      const yVal = m.top + ((max - v) / span) * (height - m.top - m.bottom);
-      const y = v >= 0 ? yVal : zeroY;
-      const h = Math.max(Math.abs(yVal - zeroY), 2);
-      const fill = diverging ? (v >= 0 ? "#0bbf8a" : "#d6454e") : color;
-
-      return `
-        <rect x="${x}" y="${y}" width="${Math.max(barW - 12, 8)}" height="${h}" rx="5" fill="${fill}" opacity="0.9" />
-        <text x="${x + (Math.max(barW - 12, 8) / 2)}" y="${height - 20}" text-anchor="middle" class="axis-label">${truncate(
-          label,
-          10
-        )}</text>
-        <text x="${x + (Math.max(barW - 12, 8) / 2)}" y="${y - 4}" text-anchor="middle" class="axis-label">${fmt(v)}${suffix}</text>
-      `;
+  const rows = withShots
+    .slice(-20)
+    .reverse()
+    .map((t) => {
+      const a = t.screenshotAnalysis;
+      return `<tr>
+        <td>${escapeHtml(t.tradeDate || "-")}</td>
+        <td>${escapeHtml(t.instrument || "-")}</td>
+        <td>${fmt(a.brightness)}</td>
+        <td>${fmt(a.contrast)}</td>
+        <td>${escapeHtml(a.tag)}</td>
+      </tr>`;
     })
     .join("");
 
-  svg.innerHTML = `
-    <line x1="${m.left}" y1="${m.top}" x2="${m.left}" y2="${height - m.bottom}" stroke="#c8d5ef" />
-    <line x1="${m.left}" y1="${height - m.bottom}" x2="${width - m.right}" y2="${height - m.bottom}" stroke="#c8d5ef" />
-    ${diverging ? `<line x1="${m.left}" y1="${zeroY}" x2="${width - m.right}" y2="${zeroY}" stroke="#d5deef" stroke-dasharray="4 4" />` : ""}
-    ${bars}
+  el.screenshotReport.innerHTML = `
+    <h3>Screenshot Insights (Auto-analyzed)</h3>
+    <p>Quick image signal: brightness + contrast tag for chart clarity context.</p>
+    <table class="strategy-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Instrument</th>
+          <th>Brightness</th>
+          <th>Contrast</th>
+          <th>Tag</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
   `;
 }
 
-function renderHistogram(svgId, values, bins = 8) {
-  const svg = document.getElementById(svgId);
-  const width = 600;
-  const height = 250;
-
-  if (!values.length) {
-    svg.innerHTML = emptySvgLabel(width, height, "No data");
-    return;
-  }
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  const step = span / bins;
-  const buckets = Array.from({ length: bins }, (_, i) => ({
-    start: min + i * step,
-    end: min + (i + 1) * step,
-    count: 0,
-  }));
-
-  values.forEach((v) => {
-    const idx = Math.min(Math.floor((v - min) / step), bins - 1);
-    buckets[idx].count += 1;
-  });
-
-  renderBarChart(
-    svgId,
-    buckets.map((b) => `${fmt(b.start)} to ${fmt(b.end)}`),
-    buckets.map((b) => b.count),
-    "#1f4dbf"
-  );
-}
-
-function sparklineSvg(values) {
-  if (!values.length) {
-    return `<svg class="sparkline" viewBox="0 0 300 90"></svg>`;
-  }
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const safeMin = min === max ? min - 1 : min;
-  const safeMax = min === max ? max + 1 : max;
-
-  const x = (i) => 8 + (i / Math.max(values.length - 1, 1)) * 284;
-  const y = (v) => 8 + ((safeMax - v) / (safeMax - safeMin)) * 74;
-  const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-
-  return `
-    <svg class="sparkline" viewBox="0 0 300 90">
-      <polyline points="${points}" fill="none" stroke="#2663ff" stroke-width="2.2" />
-      <circle cx="${x(values.length - 1)}" cy="${y(values[values.length - 1])}" r="3" fill="#0bbf8a" />
-    </svg>
-  `;
-}
-
-function computeMaxDrawdown(pnlSeries) {
-  let peak = 0;
-  let equity = 0;
-  let maxDd = 0;
-
-  pnlSeries.forEach((pnl) => {
-    equity += pnl;
-    peak = Math.max(peak, equity);
-    maxDd = Math.max(maxDd, peak - equity);
-  });
-
-  return maxDd;
-}
-
-function cumulative(values) {
-  let sumVal = 0;
-  return values.map((v) => {
-    sumVal += v;
-    return sumVal;
+function filterByDate(trades, from, to) {
+  return trades.filter((t) => {
+    const passFrom = !from || (t.tradeDate && t.tradeDate >= from);
+    const passTo = !to || (t.tradeDate && t.tradeDate <= to);
+    return passFrom && passTo;
   });
 }
 
-function groupBy(list, keyFn) {
+function sortTrades(trades) {
+  trades.sort((a, b) => (a.tradeDate || "").localeCompare(b.tradeDate || ""));
+}
+
+function groupBy(list, fn) {
   return list.reduce((acc, item) => {
-    const key = keyFn(item);
+    const key = fn(item);
     if (!acc[key]) acc[key] = [];
     acc[key].push(item);
     return acc;
   }, {});
 }
 
-function dayLabel(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(`${dateStr}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return "";
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+function cumulative(values) {
+  let total = 0;
+  return values.map((v) => {
+    total += v;
+    return total;
+  });
 }
 
-function getHour(timeStr) {
-  if (!timeStr || !timeStr.includes(":")) return 0;
-  return Number(timeStr.split(":")[0]) || 0;
+function lineChart(id, values, color, label) {
+  const svg = document.getElementById(id);
+  const w = 640;
+  const h = 240;
+  const m = { t: 20, r: 20, b: 30, l: 42 };
+
+  if (!values.length) {
+    svg.innerHTML = `<text x="${w / 2}" y="${h / 2}" class="axis-label" text-anchor="middle">No data</text>`;
+    return;
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const safeMin = min === max ? min - 1 : min;
+  const safeMax = min === max ? max + 1 : max;
+
+  const x = (i) => m.l + (i / Math.max(values.length - 1, 1)) * (w - m.l - m.r);
+  const y = (v) => m.t + ((safeMax - v) / (safeMax - safeMin)) * (h - m.t - m.b);
+
+  const poly = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+
+  svg.innerHTML = `
+    <line x1="${m.l}" y1="${h - m.b}" x2="${w - m.r}" y2="${h - m.b}" stroke="#d9dee6" />
+    <line x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${h - m.b}" stroke="#d9dee6" />
+    <polyline points="${poly}" fill="none" stroke="${color}" stroke-width="2.4" />
+    <text x="${w - 120}" y="${m.t + 10}" class="axis-label">${label}</text>
+  `;
+}
+
+function barChart(id, labels, values, diverging, suffix = "") {
+  const svg = document.getElementById(id);
+  const w = 640;
+  const h = 240;
+  const m = { t: 20, r: 14, b: 56, l: 48 };
+
+  if (!labels.length) {
+    svg.innerHTML = `<text x="${w / 2}" y="${h / 2}" class="axis-label" text-anchor="middle">No data</text>`;
+    return;
+  }
+
+  const min = diverging ? Math.min(0, ...values) : 0;
+  const max = Math.max(...values, 1);
+  const span = max - min || 1;
+  const barW = (w - m.l - m.r) / labels.length;
+  const zeroY = m.t + ((max - 0) / span) * (h - m.t - m.b);
+
+  const bars = labels
+    .map((label, i) => {
+      const v = values[i] || 0;
+      const x = m.l + i * barW + 6;
+      const yv = m.t + ((max - v) / span) * (h - m.t - m.b);
+      const y = v >= 0 ? yv : zeroY;
+      const bh = Math.max(2, Math.abs(yv - zeroY));
+      const fill = diverging ? (v >= 0 ? "#1e9b64" : "#cb3f4a") : "#2162ff";
+
+      return `
+        <rect x="${x}" y="${y}" width="${Math.max(barW - 12, 8)}" height="${bh}" fill="${fill}" rx="5" />
+        <text x="${x + Math.max(barW - 12, 8) / 2}" y="${h - 22}" class="axis-label" text-anchor="middle">${truncate(label, 11)}</text>
+        <text x="${x + Math.max(barW - 12, 8) / 2}" y="${y - 4}" class="axis-label" text-anchor="middle">${fmt(v)}${suffix}</text>
+      `;
+    })
+    .join("");
+
+  svg.innerHTML = `
+    <line x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${h - m.b}" stroke="#d9dee6" />
+    <line x1="${m.l}" y1="${h - m.b}" x2="${w - m.r}" y2="${h - m.b}" stroke="#d9dee6" />
+    ${diverging ? `<line x1="${m.l}" y1="${zeroY}" x2="${w - m.r}" y2="${zeroY}" stroke="#d9dee6" stroke-dasharray="4 4" />` : ""}
+    ${bars}
+  `;
+}
+
+function histogram(id, values, bins) {
+  if (!values.length) {
+    barChart(id, [], [], false);
+    return;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const width = max - min || 1;
+  const step = width / bins;
+  const buckets = Array.from({ length: bins }, (_, i) => ({
+    start: min + i * step,
+    end: min + (i + 1) * step,
+    count: 0,
+  }));
+  values.forEach((v) => {
+    const idx = Math.min(bins - 1, Math.floor((v - min) / step));
+    buckets[idx].count += 1;
+  });
+  barChart(
+    id,
+    buckets.map((b) => `${fmt(b.start)}-${fmt(b.end)}`),
+    buckets.map((b) => b.count),
+    false
+  );
+}
+
+async function toDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function analyzeImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      const maxW = 240;
+      const scale = Math.min(1, maxW / img.width);
+      c.width = Math.max(1, Math.round(img.width * scale));
+      c.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
+
+      let sumLum = 0;
+      const lums = [];
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        sumLum += lum;
+        lums.push(lum);
+      }
+
+      const brightness = sumLum / lums.length;
+      const variance = lums.reduce((acc, v) => acc + (v - brightness) ** 2, 0) / lums.length;
+      const contrast = Math.sqrt(variance);
+
+      let tag = "Balanced chart context";
+      if (contrast < 28) tag = "Low visual contrast";
+      if (brightness < 80) tag = "Dark screenshot";
+      if (brightness > 185) tag = "Very bright screenshot";
+
+      resolve({ brightness, contrast, tag });
+    };
+    img.onerror = () => reject(new Error("image decode failed"));
+    img.src = dataUrl;
+  });
+}
+
+function maxDrawdown(pnlSeries) {
+  let peak = 0;
+  let equity = 0;
+  let dd = 0;
+  pnlSeries.forEach((p) => {
+    equity += p;
+    peak = Math.max(peak, equity);
+    dd = Math.max(dd, peak - equity);
+  });
+  return dd;
 }
 
 function sum(values) {
-  return values.reduce((acc, v) => acc + (Number.isFinite(v) ? v : 0), 0);
+  return values.reduce((a, v) => a + (Number.isFinite(v) ? v : 0), 0);
 }
 
-function average(values) {
-  if (!values.length) return 0;
-  return sum(values) / values.length;
+function avg(values) {
+  return values.length ? sum(values) / values.length : 0;
 }
 
-function money(v) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(
-    Number.isFinite(v) ? v : 0
-  );
+function toNum(v) {
+  if (v === "" || v === null || v === undefined) return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function trim(v) {
+  return String(v || "").trim();
+}
+
+function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
 }
 
 function fmt(v) {
   return Number.isFinite(v) ? Number(v).toFixed(2) : "0.00";
 }
 
-function fmtMinutes(mins) {
-  if (!mins) return "-";
-  if (mins < 60) return `${mins}m`;
-  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+function money(v) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: state.market === "india" ? "INR" : "USD",
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(v) ? v : 0);
 }
 
-function truncate(text, maxLen) {
+function truncate(text, length) {
   if (!text) return "";
-  return text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
-}
-
-function emptySvgLabel(width, height, msg) {
-  return `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" class="axis-label">${msg}</text>`;
+  return text.length > length ? `${text.slice(0, length - 1)}...` : text;
 }
 
 function escapeHtml(str) {
-  if (str === null || str === undefined) return "";
-  return String(str)
+  return String(str ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
